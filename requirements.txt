@@ -1,0 +1,9 @@
+python-dotenv
+loguru
+pinecone
+pinecone-text
+langchain
+langchain-community
+langchain-huggingface
+sentence-transformers
+google-genai
