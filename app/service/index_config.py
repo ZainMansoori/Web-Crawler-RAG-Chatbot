@@ -8,9 +8,9 @@ from app.service.diff import hash_text
 
 load_dotenv(".env")
 
-INDEX_NAME = os.getenv("PINECONE_INDEX", "hybrid-rag-chatbot")
+INDEX_NAME = os.getenv("PINECONE_INDEX")
 BM25_PATH = os.getenv("BM25_PATH", "bm25_values.json")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "all-MiniLM-L6-v2")
+EMBED_MODEL = os.getenv("EMBED_MODEL")
 
 
 def get_pinecone_index():
@@ -68,16 +68,44 @@ def get_existing_hashes(index, url, embedder, top_k=1000):
 
 
 def upsert_chunks(index, url, chunks_with_hash, embedder, bm25_encoder):
+    """
+    Generate embeddings and upsert chunks to Pinecone index.
+    
+    Args:
+        index: Pinecone index instance
+        url: Source URL for the chunks
+        chunks_with_hash: List of (index, text, hash) tuples
+        embedder: Dense embedding model
+        bm25_encoder: Sparse BM25 encoder
+    
+    Returns:
+        Number of chunks successfully upserted
+    """
     if not chunks_with_hash:
+        logger.debug(f"No chunks to upsert for {url}")
         return 0
+    
+    logger.info(f"Upserting {len(chunks_with_hash)} chunks for {url}")
+    
     texts = [chunk for _, chunk, _ in chunks_with_hash]
+    
+    # Generate dense embeddings
+    logger.debug("Generating dense embeddings...")
     dense_vectors = [embedder.embed_query(text) for text in texts]
+    
+    # Generate sparse BM25 vectors
+    logger.debug("Generating sparse BM25 vectors...")
     sparse_vectors = bm25_encoder.encode_documents(texts)
 
     vectors = []
     for (i, text, h), dense_vec, sparse_vec in zip(
         chunks_with_hash, dense_vectors, sparse_vectors
     ):
+        # Validate vector dimensions
+        if len(dense_vec) != 384:
+            logger.error(f"Invalid dense vector dimension: {len(dense_vec)} (expected 384)")
+            continue
+            
         vectors.append(
             {
                 "id": f"{url}#c{i}",
@@ -88,8 +116,17 @@ def upsert_chunks(index, url, chunks_with_hash, embedder, bm25_encoder):
                     "chunk_hash": h,
                     "position": i,
                     "context": text,
+                    "chunk_length": len(text),
                 },
             }
         )
-    index.upsert(vectors=vectors)
+    
+    if vectors:
+        try:
+            index.upsert(vectors=vectors)
+            logger.success(f"Successfully upserted {len(vectors)} vectors to Pinecone")
+        except Exception as exc:
+            logger.error(f"Failed to upsert vectors: {exc}")
+            raise
+    
     return len(vectors)
